@@ -8,54 +8,49 @@ import tempfile
 import traceback
 
 def main(page: ft.Page):
-    # 1. Garante que o app desenhe o fundo imediatamente para evitar a TELA PRETA
+    # 1. Configurações Iniciais da Tela
     page.title = "Anki Heatmap"
     page.theme_mode = ft.ThemeMode.DARK
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
+    page.padding = 20
 
-    # TELA DE CARREGAMENTO INICIAL
-    loading_text = ft.Text("Procurando banco de dados...", size=18)
-    page.add(
-        ft.ProgressRing(color=ft.Colors.GREEN_400),
-        ft.Container(height=20),
-        loading_text
-    )
-    page.update()
+    # 2. Função para mostrar erros na tela (em vez de fechar ou ficar preto)
+    def mostrar_erro(mensagem, erro_tecnico=""):
+        page.clean()
+        page.vertical_alignment = ft.MainAxisAlignment.CENTER
+        page.add(
+            ft.Icon(ft.Icons.ERROR, color=ft.Colors.RED_500, size=60),
+            ft.Text(mensagem, color=ft.Colors.RED_300, weight="bold", size=20, text_align=ft.TextAlign.CENTER),
+            ft.Container(height=10),
+            ft.Text(erro_tecnico, size=12, color=ft.Colors.WHITE60, selectable=True),
+            ft.Container(height=20),
+            ft.ElevatedButton("Voltar ao Início", icon=ft.Icons.HOME, on_click=lambda _: tela_inicial())
+        )
+        page.update()
 
-    try:
-        def on_dialog_result(e: ft.FilePickerResultEvent):
-            if e.files and len(e.files) > 0:
-                selected_path = e.files[0].path
-                ano_atual = datetime.datetime.now().year
-                show_heatmap(ano_atual, selected_path)
-            else:
-                page.snack_bar = ft.SnackBar(ft.Text("Nenhum arquivo selecionado!"))
-                page.snack_bar.open = True
-                page.update()
-
-        file_picker = ft.FilePicker(on_result=on_dialog_result)
-        page.overlay.append(file_picker)
-
-        def show_heatmap(year, db_path):
+    # 3. Lógica Pesada: Ler Banco de Dados e Gerar Heatmap
+    def gerar_heatmap(caminho_db, year):
+        try:
+            # Mostra que está carregando...
             page.clean()
             page.vertical_alignment = ft.MainAxisAlignment.CENTER
-            
-            # Mostra o carregamento enquanto copia e lê o DB pesado
             page.add(
-                ft.ProgressRing(color=ft.Colors.BLUE), 
-                ft.Container(height=10),
-                ft.Text("Lendo estudos do Anki...")
+                ft.ProgressRing(color=ft.Colors.GREEN),
+                ft.Container(height=15),
+                ft.Text("Lendo dados do Anki, por favor aguarde...", size=16)
             )
             page.update()
 
+            # Truque para burlar arquivo trancado: copia para área temporária
             temp_dir = tempfile.gettempdir()
             safe_db_path = os.path.join(temp_dir, f"temp_anki_{year}.anki2")
             try:
-                shutil.copy2(db_path, safe_db_path)
-            except:
-                safe_db_path = db_path 
+                shutil.copy2(caminho_db, safe_db_path)
+            except Exception:
+                safe_db_path = caminho_db
 
+            # Lógica de datas
             inicio = datetime.date(year, 1, 1)
             fim = datetime.date(year, 12, 31)
             dias_no_ano = (fim - inicio).days + 1
@@ -66,35 +61,26 @@ def main(page: ft.Page):
             dados = {}
             max_count = 1
             
-            try:
-                conn = sqlite3.connect(safe_db_path)
-                cursor = conn.cursor()
-                query = f"""
-                    SELECT strftime('%Y-%m-%d', id/1000.0, 'unixepoch', 'localtime'), type, count() 
-                    FROM revlog WHERE id >= {start_ts} AND id < {end_ts} GROUP BY 1, 2
-                """
-                cursor.execute(query)
-                for d_str, tipo, count in cursor.fetchall():
-                    if d_str not in dados:
-                        dados[d_str] = {'0':0, '1':0, '2':0, '3':0, 'total': 0}
-                    tipo_seguro = str(tipo) if str(tipo) in ['0', '1', '2', '3'] else '3'
-                    dados[d_str][tipo_seguro] += count
-                    dados[d_str]['total'] += count
-                conn.close()
-                if dados:
-                    max_count = max([d['total'] for d in dados.values()])
-            except Exception as e:
-                page.clean()
-                page.add(
-                    ft.Icon(ft.Icons.ERROR_OUTLINE, color=ft.Colors.RED, size=50),
-                    ft.Text("Falha ao ler o arquivo!", color=ft.Colors.RED, weight="bold", size=20),
-                    ft.Text(f"Erro: {str(e)}", text_align=ft.TextAlign.CENTER),
-                    ft.Container(height=20),
-                    ft.ElevatedButton("Tentar Novamente", icon=ft.Icons.SYNC, on_click=lambda _: file_picker.pick_files())
-                )
-                page.update()
-                return
+            # Consultando o Banco
+            conn = sqlite3.connect(safe_db_path)
+            cursor = conn.cursor()
+            query = f"""
+                SELECT strftime('%Y-%m-%d', id/1000.0, 'unixepoch', 'localtime'), type, count() 
+                FROM revlog WHERE id >= {start_ts} AND id < {end_ts} GROUP BY 1, 2
+            """
+            cursor.execute(query)
+            for d_str, tipo, count in cursor.fetchall():
+                if d_str not in dados:
+                    dados[d_str] = {'0':0, '1':0, '2':0, '3':0, 'total': 0}
+                tipo_seguro = str(tipo) if str(tipo) in ['0', '1', '2', '3'] else '3'
+                dados[d_str][tipo_seguro] += count
+                dados[d_str]['total'] += count
+            conn.close()
+            
+            if dados:
+                max_count = max([d['total'] for d in dados.values()])
 
+            # Montando o Calendário Gráfico
             cores = {'0': "#2ecc71", '1': "#f1c40f", '2': "#e74c3c", '3': "#3498db"}
             pad = (inicio.weekday() + 1) % 7 
 
@@ -136,10 +122,11 @@ def main(page: ft.Page):
                 heatmap_row.controls.append(coluna_atual)
 
             botoes = ft.Row([
-                ft.Button("<- Ano Ant.", on_click=lambda _: show_heatmap(year - 1, db_path)),
-                ft.Button("Prox. Ano ->", on_click=lambda _: show_heatmap(year + 1, db_path)),
+                ft.Button("<- Ano Ant.", on_click=lambda _: gerar_heatmap(caminho_db, year - 1)),
+                ft.Button("Prox. Ano ->", on_click=lambda _: gerar_heatmap(caminho_db, year + 1)),
             ], alignment=ft.MainAxisAlignment.CENTER)
 
+            # Exibe o Mapa Prontinho
             page.clean()
             page.vertical_alignment = ft.MainAxisAlignment.START
             page.add(
@@ -154,62 +141,86 @@ def main(page: ft.Page):
                     border_radius=10
                 ),
                 ft.Container(height=20),
-                ft.ElevatedButton("Atualizar (Sincronizar)", icon=ft.Icons.SYNC, on_click=lambda _: file_picker.pick_files())
+                ft.ElevatedButton("Início", icon=ft.Icons.HOME, on_click=lambda _: tela_inicial())
             )
             page.update()
 
-        # Dá um respiro pro celular renderizar a bolinha girando antes de procurar o arquivo
-        time.sleep(0.5)
+        except Exception as e:
+            mostrar_erro("Não foi possível gerar o Heatmap", traceback.format_exc())
 
+    # 4. Buscador Automático de Pastas
+    def buscar_automaticamente(e):
         caminhos_padrao = [
             "/storage/emulated/0/AnkiDroid/collection.anki2",
             "/sdcard/AnkiDroid/collection.anki2"
         ]
         
-        db_legivel = None
+        db_encontrado = None
         for path in caminhos_padrao:
             if os.path.exists(path):
-                try:
-                    temp_dir = tempfile.gettempdir()
-                    test_path = os.path.join(temp_dir, "test_perm.anki2")
-                    shutil.copy2(path, test_path)
-                    
-                    conn = sqlite3.connect(test_path)
-                    conn.execute("SELECT 1 FROM revlog LIMIT 1")
-                    conn.close()
-                    
-                    db_legivel = test_path
-                    break
-                except Exception:
-                    pass 
-
-        ano_atual = datetime.datetime.now().year
-
-        if db_legivel:
-            show_heatmap(ano_atual, db_legivel)
+                db_encontrado = path
+                break
+        
+        if db_encontrado:
+            try:
+                # Testa se o app tem permissão para ler
+                conn = sqlite3.connect(db_encontrado)
+                conn.execute("SELECT 1 FROM revlog LIMIT 1")
+                conn.close()
+                gerar_heatmap(db_encontrado, datetime.datetime.now().year)
+            except Exception as ex:
+                mostrar_erro("Arquivo encontrado, mas o Android bloqueou a leitura automática.", "Use o botão de 'Selecionar Manualmente' para dar permissão.\nErro: " + str(ex))
         else:
-            page.clean()
-            page.vertical_alignment = ft.MainAxisAlignment.CENTER
-            page.add(
-                ft.Icon(ft.Icons.LOCK_OUTLINE, size=80, color=ft.Colors.ORANGE),
-                ft.Text("Arquivo não encontrado", size=20, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
-                ft.Text("Por favor, clique abaixo e selecione o arquivo 'collection.anki2' manualmente.", text_align=ft.TextAlign.CENTER),
-                ft.Container(height=20),
-                ft.ElevatedButton("Selecionar Arquivo", icon=ft.Icons.FOLDER_OPEN, on_click=lambda _: file_picker.pick_files(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE)
-            )
+            page.snack_bar = ft.SnackBar(ft.Text("Não achei a pasta do Anki automaticamente! Use a busca manual."))
+            page.snack_bar.open = True
             page.update()
 
-    except Exception as e:
-        # SE ALGO MAIS DER ERRADO, MOSTRA NA TELA EM VEZ DE FICAR TELA PRETA
+    # 5. Seletor Manual de Arquivo (Quando o usuário escolhe o arquivo)
+    def on_arquivo_selecionado(e: ft.FilePickerResultEvent):
+        if e.files and len(e.files) > 0:
+            caminho_selecionado = e.files[0].path
+            ano_atual = datetime.datetime.now().year
+            gerar_heatmap(caminho_selecionado, ano_atual)
+        else:
+            page.snack_bar = ft.SnackBar(ft.Text("Nenhum arquivo selecionado!"))
+            page.snack_bar.open = True
+            page.update()
+
+    file_picker = ft.FilePicker(on_result=on_arquivo_selecionado)
+    page.overlay.append(file_picker)
+
+    # 6. TELA INICIAL (A primeira coisa que aparece sem travar)
+    def tela_inicial():
         page.clean()
         page.vertical_alignment = ft.MainAxisAlignment.CENTER
-        err_msg = traceback.format_exc()
         page.add(
-            ft.Icon(ft.Icons.BUG_REPORT, size=80, color=ft.Colors.RED),
-            ft.Text("Ocorreu um erro interno:", color=ft.Colors.RED, weight="bold"),
-            ft.Text(err_msg, size=12, selectable=True, color=ft.Colors.WHITE)
+            ft.Icon(ft.Icons.ANALYTICS, size=80, color=ft.Colors.BLUE),
+            ft.Text("Anki Heatmap", size=28, weight="bold"),
+            ft.Container(height=10),
+            ft.Text("Escolha como carregar seus dados do AnkiDroid:", text_align=ft.TextAlign.CENTER, color=ft.Colors.WHITE70),
+            ft.Container(height=30),
+            
+            ft.ElevatedButton(
+                "1. Buscar Automaticamente", 
+                icon=ft.Icons.SEARCH, 
+                on_click=buscar_automaticamente,
+                width=300, height=50
+            ),
+            ft.Container(height=10),
+            ft.ElevatedButton(
+                "2. Selecionar Manualmente", 
+                icon=ft.Icons.FOLDER_OPEN, 
+                on_click=lambda _: file_picker.pick_files(),
+                width=300, height=50,
+                bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE
+            ),
+            ft.Container(height=20),
+            ft.Text("Dica manual: Vá nas pastas até achar 'AnkiDroid' -> 'collection.anki2'", size=12, color=ft.Colors.WHITE54, text_align=ft.TextAlign.CENTER)
         )
         page.update()
+
+    # Inicia o app renderizando a tela de botões IMEDIATAMENTE
+    tela_inicial()
 
 if __name__ == '__main__':
     ft.app(target=main)
