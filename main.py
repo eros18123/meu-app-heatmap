@@ -4,27 +4,36 @@ import datetime
 import time
 import os
 
-# Caminho do seu banco de dados para testar no PC
-ANKI_DB_PATH = r"C:\Users\eros\Desktop\anki novo\aaa\teste\collection.anki2"
-
 def main(page: ft.Page):
     # Configurações visuais do App
     page.title = "Anki Heatmap"
     page.theme_mode = ft.ThemeMode.DARK
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
+    page.vertical_alignment = ft.MainAxisAlignment.START
     
     page.window.width = 400  
     page.window.height = 700
 
+    # Adicionando o FilePicker para permitir que o usuário pegue o banco de dados no celular
+    def on_dialog_result(e: ft.FilePickerResultEvent):
+        if e.files and len(e.files) > 0:
+            selected_path = e.files[0].path
+            ano_atual = datetime.datetime.now().year
+            show_heatmap(ano_atual, selected_path)
+        else:
+            page.open(ft.SnackBar(ft.Text("Nenhum arquivo selecionado!")))
+
+    file_picker = ft.FilePicker(on_result=on_dialog_result)
+    page.overlay.append(file_picker)
+
     # ==========================================
     # TELA DE HEATMAP
     # ==========================================
-    def show_heatmap(year):
-        page.clean()  # Limpa a tela de login
+    def show_heatmap(year, db_path):
+        page.clean() 
         page.vertical_alignment = ft.MainAxisAlignment.START
 
-        # Lógica de datas e SQLite (igual ao seu Add-on)
+        # Lógica de datas e SQLite
         inicio = datetime.date(year, 1, 1)
         fim = datetime.date(year, 12, 31)
         dias_no_ano = (fim - inicio).days + 1
@@ -35,9 +44,9 @@ def main(page: ft.Page):
         dados = {}
         max_count = 1
         
-        if os.path.exists(ANKI_DB_PATH):
+        if os.path.exists(db_path):
             try:
-                conn = sqlite3.connect(ANKI_DB_PATH)
+                conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
                 query = f"""
                     SELECT strftime('%Y-%m-%d', id/1000.0, 'unixepoch', 'localtime'), type, count() 
@@ -53,8 +62,9 @@ def main(page: ft.Page):
                 conn.close()
                 if dados:
                     max_count = max([d['total'] for d in dados.values()])
-            except sqlite3.OperationalError:
-                pass # Ignora erro de lock no protótipo
+            except Exception as e:
+                page.add(ft.Text(f"Erro ao ler o banco de dados: {e}", color=ft.Colors.RED))
+                return
 
         # Cores (Formato HEX pro Flet)
         cores = {'0': "#2ecc71", '1': "#f1c40f", '2': "#e74c3c", '3': "#3498db"}
@@ -76,7 +86,6 @@ def main(page: ft.Page):
                 dia = dados[d_str]
                 tipo_dom = max(['0', '1', '2', '3'], key=lambda k: dia[k])
                 
-                # CORRIGIDO: O texto do tooltip agora fica direto na propriedade do Container!
                 quadrado = ft.Container(
                     width=14, height=14, 
                     bgcolor=cores[tipo_dom], 
@@ -85,7 +94,6 @@ def main(page: ft.Page):
                     tooltip=f"{d_str}\nTotal: {dia['total']}\nNovos: {dia['0']} | Mad: {dia['1']}\nApr: {dia['2']} | Filt: {dia['3']}"
                 )
             else:
-                # CORRIGIDO AQUI TAMBÉM!
                 quadrado = ft.Container(
                     width=14, height=14, 
                     bgcolor=ft.Colors.WHITE_10, 
@@ -103,8 +111,8 @@ def main(page: ft.Page):
             heatmap_row.controls.append(coluna_atual)
 
         botoes = ft.Row([
-            ft.Button("<- Ano Ant.", on_click=lambda _: show_heatmap(year - 1)),
-            ft.Button("Prox. Ano ->", on_click=lambda _: show_heatmap(year + 1)),
+            ft.Button("<- Ano Ant.", on_click=lambda _: show_heatmap(year - 1, db_path)),
+            ft.Button("Prox. Ano ->", on_click=lambda _: show_heatmap(year + 1, db_path)),
         ], alignment=ft.MainAxisAlignment.CENTER)
 
         page.add(
@@ -119,37 +127,41 @@ def main(page: ft.Page):
                 border_radius=10
             ),
             ft.Container(height=20),
-            ft.Button("Sair", color=ft.Colors.RED_300, on_click=lambda _: show_login())
+            ft.ElevatedButton("Atualizar Arquivo (Sincronizar)", icon=ft.Icons.SYNC, on_click=lambda _: file_picker.pick_files())
         )
         page.update()
 
     # ==========================================
-    # TELA DE LOGIN
+    # LÓGICA DE INICIALIZAÇÃO
     # ==========================================
-    def show_login():
-        page.clean()
+    # Caminhos onde o AnkiDroid costuma salvar o arquivo
+    caminhos_padrao = [
+        "/storage/emulated/0/AnkiDroid/collection.anki2",
+        "/sdcard/AnkiDroid/collection.anki2"
+    ]
+    
+    db_encontrado = None
+    for path in caminhos_padrao:
+        if os.path.exists(path):
+            db_encontrado = path
+            break
+            
+    ano_atual = datetime.datetime.now().year
+
+    if db_encontrado:
+        # Se achou direto (celulares antigos ou permissões dadas), já abre o mapa
+        show_heatmap(ano_atual, db_encontrado)
+    else:
+        # Se não achou (Android recente), pede pro usuário escolher o arquivo
         page.vertical_alignment = ft.MainAxisAlignment.CENTER
-        
-        user_input = ft.TextField(label="Usuário (usuario)", width=300, bgcolor=ft.Colors.WHITE_10)
-        pass_input = ft.TextField(label="Senha (senha123)", password=True, width=300, bgcolor=ft.Colors.WHITE_10)
-        
-        def btn_login_click(e):
-            if user_input.value == "usuario" and pass_input.value == "senha123":
-                show_heatmap(2026)
-            else:
-                page.open(ft.SnackBar(ft.Text("Login incorreto!")))
-
         page.add(
-            ft.Icon(ft.Icons.MAP_OUTLINED, size=80, color=ft.Colors.GREEN),
-            ft.Text("App Heatmap", size=30, weight=ft.FontWeight.BOLD),
+            ft.Icon(ft.Icons.SD_STORAGE_OUTLINED, size=80, color=ft.Colors.BLUE),
+            ft.Text("Banco de Dados não encontrado!", size=20, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+            ft.Text("Por favor, selecione o arquivo 'collection.anki2' que fica na pasta do AnkiDroid do seu celular.", text_align=ft.TextAlign.CENTER),
             ft.Container(height=20),
-            user_input,
-            pass_input,
-            ft.Button("Entrar", on_click=btn_login_click, width=300, bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE)
+            ft.ElevatedButton("Selecionar Arquivo", icon=ft.Icons.FOLDER_OPEN, on_click=lambda _: file_picker.pick_files(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE)
         )
         page.update()
-
-    show_login()
 
 if __name__ == '__main__':
     ft.run(main)
