@@ -185,4 +185,4 @@ def main(page: ft.Page):
         page.update()
 
 if __name__ == '__main__':
-    ft.run(main)
+    ft.app(target=main)
