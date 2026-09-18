@@ -22,7 +22,7 @@ jobs:
           java-version: '17'
 
       - name: Instalando o Flet
-        run: pip install flet
+        run: pip install flet==0.21.2
 
       - name: Transformando em APK (Magia!)
         run: yes | flet build apk
