@@ -229,4 +229,4 @@ def main(page: ft.Page):
         mostrar_erro("Erro Crítico ao Iniciar", traceback.format_exc())
 
 if __name__ == '__main__':
-    ft.app(target=main)
+    ft.run(main)
