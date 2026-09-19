@@ -63,6 +63,28 @@ def main(page: ft.Page):
         with zipfile.ZipFile(copia, "r") as z:
             nomes = z.namelist()
             diag["entradas"] = nomes
+
+            # Prioridade: o banco real comprimido em zstd (anki21b) primeiro,
+            # pois o "collection.anki2" moderno costuma ser so um stub vazio
+            # de compatibilidade com apps antigos.
+            if "collection.anki21b" in nomes:
+                try:
+                    import zstandard
+                except Exception as ex:
+                    raise RuntimeError(
+                        "O backup usa compactacao zstd, mas a biblioteca "
+                        "'zstandard' nao carregou neste build.\n"
+                        f"Detalhe: {ex}"
+                    )
+                diag["escolhido"] = "collection.anki21b (descomprimido com zstd)"
+                destino = os.path.join(temp_dir, "anki_db_tmp.anki2")
+                dctx = zstandard.ZstdDecompressor()
+                with z.open("collection.anki21b") as origem:
+                    with dctx.stream_reader(origem) as reader, open(destino, "wb") as saida:
+                        shutil.copyfileobj(reader, saida)
+                diag["tamanho"] = os.path.getsize(destino)
+                return destino, diag
+
             candidatos = ["collection.anki21", "collection.anki2"]
             escolhido = None
             for nome in candidatos:
@@ -72,12 +94,9 @@ def main(page: ft.Page):
 
             if escolhido is None:
                 raise RuntimeError(
-                    "Este backup (.colpkg/.apkg) usa um formato de "
-                    "compactacao (zstd) que este app ainda nao suporta.\n\n"
-                    "Arquivos encontrados dentro do backup:\n"
+                    "Nao encontrei um banco de dados reconhecivel dentro "
+                    "deste backup.\n\nArquivos encontrados:\n"
                     + "\n".join(nomes[:15])
-                    + "\n\nTente gerar o backup como 'Exportar colecao' "
-                    "(nao 'Criar backup'), ou use um collection.anki2 antigo."
                 )
 
             diag["escolhido"] = escolhido
