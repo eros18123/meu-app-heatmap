@@ -38,16 +38,77 @@ def main(page: ft.Page):
         )
         page.update()
 
+    def preparar_banco(caminho_original):
+        """Recebe o caminho escolhido pelo usuario e devolve o caminho de um
+        arquivo sqlite pronto pra ler. Se o arquivo for um backup moderno
+        (.colpkg/.apkg), que na verdade e um .zip, extrai o banco de dentro."""
+        import os
+        import shutil
+        import tempfile
+        import zipfile
+
+        temp_dir = tempfile.gettempdir()
+        copia = os.path.join(temp_dir, "anki_original_tmp")
+        shutil.copy2(caminho_original, copia)
+
+        if not zipfile.is_zipfile(copia):
+            # Arquivo .anki2 puro, sem compactacao.
+            destino = os.path.join(temp_dir, "anki_db_tmp.anki2")
+            shutil.copy2(copia, destino)
+            return destino
+
+        with zipfile.ZipFile(copia, "r") as z:
+            nomes = z.namelist()
+            candidatos = ["collection.anki21", "collection.anki2"]
+            escolhido = None
+            for nome in candidatos:
+                if nome in nomes:
+                    escolhido = nome
+                    break
+
+            if escolhido is None:
+                # So encontramos o formato zstd-compactado (collection.anki21b),
+                # que este app ainda nao sabe descompactar.
+                raise RuntimeError(
+                    "Este backup (.colpkg/.apkg) usa um formato de "
+                    "compactacao (zstd) que este app ainda nao suporta.\n\n"
+                    "Arquivos encontrados dentro do backup:\n"
+                    + "\n".join(nomes[:15])
+                    + "\n\nTente gerar o backup como 'Exportar colecao' "
+                    "(nao 'Criar backup'), ou use um collection.anki2 antigo."
+                )
+
+            destino = os.path.join(temp_dir, "anki_db_tmp.anki2")
+            with z.open(escolhido) as origem, open(destino, "wb") as saida:
+                shutil.copyfileobj(origem, saida)
+            return destino
+
     def ano_atual():
         import datetime
         return datetime.datetime.now().year
 
+    def ano_mais_recente(caminho_db):
+        """Descobre o ano da ultima revisao no arquivo, para nao abrir
+        num ano vazio quando o backup e antigo (ex: arquivo de 2023)."""
+        import datetime
+        import sqlite3
+
+        try:
+            db = preparar_banco(caminho_db)
+            conn = sqlite3.connect(db)
+            cur = conn.cursor()
+            cur.execute("SELECT max(id) FROM revlog")
+            max_id = cur.fetchone()[0]
+            conn.close()
+            if max_id:
+                return datetime.datetime.fromtimestamp(max_id / 1000).year
+        except Exception:
+            pass
+        return ano_atual()
+
     def gerar_heatmap(caminho_db, year):
         import datetime
-        import os
-        import shutil
         import sqlite3
-        import tempfile
         import time
 
         try:
@@ -58,13 +119,7 @@ def main(page: ft.Page):
             )
             page.update()
 
-            db = caminho_db
-            try:
-                destino = os.path.join(tempfile.gettempdir(), "anki_tmp.anki2")
-                shutil.copy2(caminho_db, destino)
-                db = destino
-            except Exception:
-                db = caminho_db
+            db = preparar_banco(caminho_db)
 
             inicio = datetime.date(year, 1, 1)
             fim = datetime.date(year, 12, 31)
@@ -122,9 +177,20 @@ def main(page: ft.Page):
             total = sum(d["total"] for d in dados.values()) if dados else 0
 
             limpar()
-            page.add(
+            controles_topo = [
                 ft.Text(f"Heatmap {year}", size=24, color=BRANCO),
                 ft.Text(f"{total} revisoes", size=13, color=CINZA),
+            ]
+            if total == 0:
+                controles_topo.append(
+                    ft.Text(
+                        "Nenhuma revisao neste ano. Use os botoes abaixo\n"
+                        "para navegar ate um ano com dados.",
+                        size=11, color=AMARELO,
+                    )
+                )
+            page.add(
+                *controles_topo,
                 ft.Container(height=10),
                 ft.Row(
                     [
@@ -162,7 +228,7 @@ def main(page: ft.Page):
                 caminho = e.files[0].path
                 if caminho:
                     estado["db"] = caminho
-                    gerar_heatmap(caminho, ano_atual())
+                    gerar_heatmap(caminho, ano_mais_recente(caminho))
                 else:
                     erro("Caminho vazio", "O picker nao retornou um caminho valido.")
         except Exception:
@@ -240,7 +306,7 @@ def main(page: ft.Page):
         for caminho in encontrados:
             def usar(_e, c=caminho):
                 estado["db"] = c
-                gerar_heatmap(c, ano_atual())
+                gerar_heatmap(c, ano_mais_recente(c))
 
             itens.append(
                 ft.Container(
