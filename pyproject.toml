@@ -1,0 +1,11 @@
+[project]
+name = "ankiheatmap"
+version = "1.0.0"
+description = "Anki Heatmap"
+requires-python = ">=3.9"
+dependencies = ["flet==0.25.2"]
+
+[tool.flet]
+org = "com.exemplo"
+product = "AnkiHeatmap"
+company = "Exemplo"
