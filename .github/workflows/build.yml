@@ -30,12 +30,16 @@ jobs:
       - name: Instalando o Flet (versao fixa)
         run: pip install "flet[all]==0.25.2"
 
+      - name: Checando a sintaxe do main.py
+        run: python -m py_compile main.py
+
       - name: Construindo o APK
         run: |
           flet build apk -v \
-            --android-permissions android.permission.READ_EXTERNAL_STORAGE=True \
-                                   android.permission.WRITE_EXTERNAL_STORAGE=True \
-                                   android.permission.MANAGE_EXTERNAL_STORAGE=True
+            --android-permissions \
+              android.permission.READ_EXTERNAL_STORAGE=True \
+              android.permission.WRITE_EXTERNAL_STORAGE=True \
+              android.permission.MANAGE_EXTERNAL_STORAGE=True
 
       - name: Gerando link de Download
         uses: actions/upload-artifact@v4
