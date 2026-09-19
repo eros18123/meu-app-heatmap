@@ -39,9 +39,9 @@ def main(page: ft.Page):
         page.update()
 
     def preparar_banco(caminho_original):
-        """Recebe o caminho escolhido pelo usuario e devolve o caminho de um
-        arquivo sqlite pronto pra ler. Se o arquivo for um backup moderno
-        (.colpkg/.apkg), que na verdade e um .zip, extrai o banco de dentro."""
+        """Recebe o caminho escolhido pelo usuario e devolve (caminho_sqlite, diagnostico).
+        Se o arquivo for um backup moderno (.colpkg/.apkg), que na verdade e
+        um .zip, extrai o banco de dentro."""
         import os
         import shutil
         import tempfile
@@ -51,14 +51,18 @@ def main(page: ft.Page):
         copia = os.path.join(temp_dir, "anki_original_tmp")
         shutil.copy2(caminho_original, copia)
 
+        diag = {"e_zip": False, "entradas": [], "escolhido": None, "tamanho": None}
+
         if not zipfile.is_zipfile(copia):
-            # Arquivo .anki2 puro, sem compactacao.
             destino = os.path.join(temp_dir, "anki_db_tmp.anki2")
             shutil.copy2(copia, destino)
-            return destino
+            diag["tamanho"] = os.path.getsize(destino)
+            return destino, diag
 
+        diag["e_zip"] = True
         with zipfile.ZipFile(copia, "r") as z:
             nomes = z.namelist()
+            diag["entradas"] = nomes
             candidatos = ["collection.anki21", "collection.anki2"]
             escolhido = None
             for nome in candidatos:
@@ -67,8 +71,6 @@ def main(page: ft.Page):
                     break
 
             if escolhido is None:
-                # So encontramos o formato zstd-compactado (collection.anki21b),
-                # que este app ainda nao sabe descompactar.
                 raise RuntimeError(
                     "Este backup (.colpkg/.apkg) usa um formato de "
                     "compactacao (zstd) que este app ainda nao suporta.\n\n"
@@ -78,10 +80,25 @@ def main(page: ft.Page):
                     "(nao 'Criar backup'), ou use um collection.anki2 antigo."
                 )
 
+            diag["escolhido"] = escolhido
             destino = os.path.join(temp_dir, "anki_db_tmp.anki2")
             with z.open(escolhido) as origem, open(destino, "wb") as saida:
                 shutil.copyfileobj(origem, saida)
-            return destino
+            diag["tamanho"] = os.path.getsize(destino)
+            return destino, diag
+
+    def texto_diagnostico(diag, extra=""):
+        linhas = [extra] if extra else []
+        linhas.append(f"E arquivo zip (.colpkg/.apkg): {diag.get('e_zip')}")
+        linhas.append(f"Arquivo escolhido de dentro: {diag.get('escolhido')}")
+        linhas.append(f"Tamanho do banco extraido: {diag.get('tamanho')} bytes")
+        if diag.get("e_zip"):
+            linhas.append("Entradas do zip: " + ", ".join(diag.get("entradas", [])[:20]))
+        if "tabelas" in diag:
+            linhas.append("Tabelas no banco: " + ", ".join(diag["tabelas"]))
+        if "linhas_revlog" in diag:
+            linhas.append(f"Linhas na tabela revlog: {diag['linhas_revlog']}")
+        return "\n".join(linhas)
 
     def ano_atual():
         import datetime
@@ -94,7 +111,7 @@ def main(page: ft.Page):
         import sqlite3
 
         try:
-            db = preparar_banco(caminho_db)
+            db, _diag = preparar_banco(caminho_db)
             conn = sqlite3.connect(db)
             cur = conn.cursor()
             cur.execute("SELECT max(id) FROM revlog")
@@ -119,7 +136,7 @@ def main(page: ft.Page):
             )
             page.update()
 
-            db = preparar_banco(caminho_db)
+            db, diag = preparar_banco(caminho_db)
 
             inicio = datetime.date(year, 1, 1)
             fim = datetime.date(year, 12, 31)
@@ -130,6 +147,15 @@ def main(page: ft.Page):
             dados = {}
             conn = sqlite3.connect(db)
             cur = conn.cursor()
+
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            diag["tabelas"] = [r[0] for r in cur.fetchall()]
+            if "revlog" in diag["tabelas"]:
+                cur.execute("SELECT count(*) FROM revlog")
+                diag["linhas_revlog"] = cur.fetchone()[0]
+            else:
+                diag["linhas_revlog"] = "tabela revlog nao existe"
+
             cur.execute(
                 "SELECT strftime('%Y-%m-%d', id/1000.0, 'unixepoch', 'localtime'),"
                 " type, count() FROM revlog WHERE id >= ? AND id < ? GROUP BY 1, 2",
@@ -184,9 +210,9 @@ def main(page: ft.Page):
             if total == 0:
                 controles_topo.append(
                     ft.Text(
-                        "Nenhuma revisao neste ano. Use os botoes abaixo\n"
-                        "para navegar ate um ano com dados.",
-                        size=11, color=AMARELO,
+                        "Nenhuma revisao neste ano.\n\n--- DIAGNOSTICO ---\n"
+                        + texto_diagnostico(diag),
+                        size=11, color=AMARELO, selectable=True,
                     )
                 )
             page.add(
