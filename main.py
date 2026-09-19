@@ -2,66 +2,173 @@ import traceback
 
 import flet as ft
 
+VERDE = "#2ecc71"
+AMARELO = "#f1c40f"
+VERMELHO = "#e74c3c"
+AZUL = "#3498db"
+VAZIO = "#2A2A2A"
+CAIXA = "#1C1C1C"
+BRANCO = "#FFFFFF"
+CINZA = "#B0B0B0"
+CINZA_ESC = "#8A8A8A"
+
+PASTAS_BUSCA = ["/storage/emulated/0", "/sdcard", "/storage"]
+
 
 def main(page: ft.Page):
     page.title = "Anki Heatmap"
     page.bgcolor = "#121212"
-    page.padding = 20
+    page.padding = 16
     page.scroll = "auto"
 
-    resultado = ft.Text("Nenhum arquivo selecionado ainda.", size=13, color="#B0B0B0", selectable=True)
+    estado = {"db": None}
 
-    def ler_banco(caminho):
-        import sqlite3
+    def limpar():
+        page.controls.clear()
 
-        try:
-            resultado.value = "Lendo banco...\n" + caminho
-            page.update()
-
-            conn = sqlite3.connect(caminho)
-            cur = conn.cursor()
-
-            cur.execute("SELECT count(*) FROM revlog")
-            total_revlog = cur.fetchone()[0]
-
-            cur.execute("SELECT count(*) FROM cards")
-            total_cards = cur.fetchone()[0]
-
-            cur.execute("SELECT min(id), max(id) FROM revlog")
-            min_id, max_id = cur.fetchone()
-
-            conn.close()
-
-            resultado.value = (
-                "PASSO 4 OK - Banco lido com sucesso!\n\n"
-                f"Caminho: {caminho}\n"
-                f"Total de revisoes (revlog): {total_revlog}\n"
-                f"Total de cartoes (cards): {total_cards}\n"
-                f"Primeiro id revlog: {min_id}\n"
-                f"Ultimo id revlog: {max_id}"
-            )
-        except Exception:
-            resultado.value = "ERRO ao ler o banco:\n" + traceback.format_exc()
+    def erro(msg, detalhe=""):
+        limpar()
+        page.add(
+            ft.Text("ERRO", size=22, color=VERMELHO),
+            ft.Text(str(msg), size=15, color=BRANCO),
+            ft.Container(height=8),
+            ft.Text(str(detalhe), size=10, color=CINZA, selectable=True),
+            ft.Container(height=16),
+            ft.ElevatedButton("Voltar", on_click=lambda _: tela_inicial()),
+        )
         page.update()
 
-    def on_result(e: ft.FilePickerResultEvent):
+    def ano_atual():
+        import datetime
+        return datetime.datetime.now().year
+
+    def gerar_heatmap(caminho_db, year):
+        import datetime
+        import os
+        import shutil
+        import sqlite3
+        import tempfile
+        import time
+
         try:
-            if e.files and len(e.files) > 0:
-                caminho = e.files[0].path
-                if caminho:
-                    ler_banco(caminho)
-                else:
-                    resultado.value = "Caminho veio vazio (None)."
-                    page.update()
-            else:
-                resultado.value = "Selecao cancelada ou vazia."
-                page.update()
-        except Exception:
-            resultado.value = "ERRO no on_result:\n" + traceback.format_exc()
+            limpar()
+            page.add(
+                ft.Text(f"Lendo dados de {year}...", size=16, color=BRANCO),
+                ft.ProgressRing(color=VERDE),
+            )
             page.update()
 
-    picker = ft.FilePicker(on_result=on_result)
+            db = caminho_db
+            try:
+                destino = os.path.join(tempfile.gettempdir(), "anki_tmp.anki2")
+                shutil.copy2(caminho_db, destino)
+                db = destino
+            except Exception:
+                db = caminho_db
 
+            inicio = datetime.date(year, 1, 1)
+            fim = datetime.date(year, 12, 31)
+            dias = (fim - inicio).days + 1
+            ini_ts = int(time.mktime(inicio.timetuple()) * 1000)
+            fim_ts = int(time.mktime((fim + datetime.timedelta(days=1)).timetuple()) * 1000)
+
+            dados = {}
+            conn = sqlite3.connect(db)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT strftime('%Y-%m-%d', id/1000.0, 'unixepoch', 'localtime'),"
+                " type, count() FROM revlog WHERE id >= ? AND id < ? GROUP BY 1, 2",
+                (ini_ts, fim_ts),
+            )
+            for d_str, tipo, qtd in cur.fetchall():
+                if d_str not in dados:
+                    dados[d_str] = {"0": 0, "1": 0, "2": 0, "3": 0, "total": 0}
+                t = str(tipo) if str(tipo) in ("0", "1", "2", "3") else "3"
+                dados[d_str][t] += qtd
+                dados[d_str]["total"] += qtd
+            conn.close()
+
+            maximo = max([d["total"] for d in dados.values()]) if dados else 1
+            maximo = max(1, maximo)
+            cores = {"0": VERDE, "1": AMARELO, "2": VERMELHO, "3": AZUL}
+
+            linha = ft.Row(scroll="always", spacing=4)
+            col = ft.Column(spacing=4)
+
+            for _ in range((inicio.weekday() + 1) % 7):
+                col.controls.append(ft.Container(width=13, height=13))
+
+            for i in range(dias):
+                d = inicio + datetime.timedelta(days=i)
+                s = d.strftime("%Y-%m-%d")
+                if s in dados:
+                    dia = dados[s]
+                    dom = max(("0", "1", "2", "3"), key=lambda k: dia[k])
+                    q = ft.Container(
+                        width=13, height=13, border_radius=2,
+                        bgcolor=cores[dom],
+                        opacity=max(0.3, min(1.0, dia["total"] / maximo)),
+                        tooltip=f"{s}  total {dia['total']}",
+                    )
+                else:
+                    q = ft.Container(width=13, height=13, border_radius=2, bgcolor=VAZIO)
+                col.controls.append(q)
+                if len(col.controls) == 7:
+                    linha.controls.append(col)
+                    col = ft.Column(spacing=4)
+            if col.controls:
+                linha.controls.append(col)
+
+            total = sum(d["total"] for d in dados.values()) if dados else 0
+
+            limpar()
+            page.add(
+                ft.Text(f"Heatmap {year}", size=24, color=BRANCO),
+                ft.Text(f"{total} revisoes", size=13, color=CINZA),
+                ft.Container(height=10),
+                ft.Row(
+                    [
+                        ft.ElevatedButton("< " + str(year - 1),
+                                          on_click=lambda _: gerar_heatmap(caminho_db, year - 1)),
+                        ft.ElevatedButton(str(year + 1) + " >",
+                                          on_click=lambda _: gerar_heatmap(caminho_db, year + 1)),
+                    ],
+                    alignment="center",
+                ),
+                ft.Container(height=14),
+                ft.Container(content=linha, padding=10, bgcolor=CAIXA, border_radius=10),
+                ft.Container(height=14),
+                ft.Row(
+                    [
+                        ft.Text("verde novo", size=10, color=VERDE),
+                        ft.Text("amarelo mad", size=10, color=AMARELO),
+                        ft.Text("vermelho apr", size=10, color=VERMELHO),
+                        ft.Text("azul filt", size=10, color=AZUL),
+                    ],
+                    wrap=True, spacing=10,
+                ),
+                ft.Container(height=14),
+                ft.ElevatedButton("Inicio", on_click=lambda _: tela_inicial()),
+            )
+            page.update()
+
+        except Exception:
+            erro("Nao foi possivel gerar o heatmap", traceback.format_exc())
+
+    # ---------- file picker ----------
+    def on_pick(e):
+        try:
+            if getattr(e, "files", None):
+                caminho = e.files[0].path
+                if caminho:
+                    estado["db"] = caminho
+                    gerar_heatmap(caminho, ano_atual())
+                else:
+                    erro("Caminho vazio", "O picker nao retornou um caminho valido.")
+        except Exception:
+            erro("Falha ao abrir o arquivo", traceback.format_exc())
+
+    picker = ft.FilePicker(on_result=on_pick)
     try:
         if hasattr(page, "services"):
             page.services.append(picker)
@@ -70,21 +177,116 @@ def main(page: ft.Page):
     except Exception:
         pass
 
-    def abrir_picker(e):
-        try:
-            picker.pick_files()
-        except Exception:
-            resultado.value = "ERRO ao chamar pick_files:\n" + traceback.format_exc()
-            page.update()
+    # ---------- busca automatica ----------
+    def procurar_arquivos(e=None):
+        import os
 
-    page.add(
-        ft.Text("PASSO 4 - Ler o SQLite", size=24, color="#FFFFFF"),
-        ft.Container(height=16),
-        ft.ElevatedButton("Selecionar collection.anki2", on_click=abrir_picker),
-        ft.Container(height=16),
-        resultado,
-    )
-    page.update()
+        limpar()
+        page.add(
+            ft.Text("Procurando arquivos .anki2...", size=16, color=BRANCO),
+            ft.ProgressRing(color=VERDE),
+        )
+        page.update()
+
+        encontrados = []
+        visitados = 0
+        try:
+            for raiz in PASTAS_BUSCA:
+                if not os.path.isdir(raiz):
+                    continue
+                base_depth = raiz.rstrip("/").count("/")
+                for dirpath, dirnames, filenames in os.walk(raiz, topdown=True):
+                    visitados += 1
+                    if visitados > 8000 or len(encontrados) >= 25:
+                        break
+                    if dirpath.count("/") - base_depth > 6:
+                        dirnames[:] = []
+                        continue
+                    dirnames[:] = [
+                        d for d in dirnames
+                        if not d.startswith(".")
+                        and d not in ("Android_old", "LOST.DIR", "node_modules")
+                    ]
+                    for nome in filenames:
+                        if nome.endswith(".anki2"):
+                            caminho = os.path.join(dirpath, nome)
+                            if caminho not in encontrados:
+                                encontrados.append(caminho)
+                if len(encontrados) >= 25:
+                    break
+        except Exception:
+            pass
+
+        limpar()
+        if not encontrados:
+            page.add(
+                ft.Text("Nenhum .anki2 encontrado automaticamente", size=18, color=BRANCO),
+                ft.Container(height=8),
+                ft.Text(
+                    "O Android costuma bloquear a leitura de /Android/data.\n"
+                    "Use 'Selecionar manualmente' abaixo.",
+                    size=12, color=CINZA,
+                ),
+                ft.Container(height=16),
+                ft.ElevatedButton("Voltar", on_click=lambda _: tela_inicial()),
+            )
+            page.update()
+            return
+
+        itens = [
+            ft.Text(f"{len(encontrados)} arquivo(s) encontrado(s)", size=18, color=BRANCO),
+            ft.Container(height=10),
+        ]
+        for caminho in encontrados:
+            def usar(_e, c=caminho):
+                estado["db"] = c
+                gerar_heatmap(c, ano_atual())
+
+            itens.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(caminho, size=11, color=CINZA, selectable=True),
+                            ft.ElevatedButton("Usar este", on_click=usar),
+                        ],
+                        spacing=6,
+                    ),
+                    bgcolor=CAIXA,
+                    padding=10,
+                    border_radius=8,
+                )
+            )
+            itens.append(ft.Container(height=8))
+
+        itens.append(ft.ElevatedButton("Voltar", on_click=lambda _: tela_inicial()))
+        page.add(*itens)
+        page.update()
+
+    def tela_inicial(e=None):
+        limpar()
+        page.add(
+            ft.Container(height=20),
+            ft.Text("Anki Heatmap", size=28, color=BRANCO),
+            ft.Container(height=6),
+            ft.Text("Carregue o seu collection.anki2", size=13, color=CINZA),
+            ft.Container(height=24),
+            ft.ElevatedButton("Procurar arquivo .anki2", on_click=procurar_arquivos,
+                              width=280, height=48),
+            ft.Container(height=10),
+            ft.ElevatedButton("Selecionar manualmente",
+                              on_click=lambda _: picker.pick_files(),
+                              width=280, height=48,
+                              bgcolor=AZUL, color=BRANCO),
+            ft.Container(height=20),
+            ft.Text(
+                "Dica: se a busca automatica nao achar nada,\n"
+                "use 'Selecionar manualmente'.",
+                size=11, color=CINZA_ESC,
+            ),
+        )
+        page.update()
+
+    tela_inicial()
 
 
 ft.app(target=main)
