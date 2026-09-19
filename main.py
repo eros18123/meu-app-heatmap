@@ -14,7 +14,6 @@ def main(page: ft.Page):
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
     page.padding = 20
 
-    # Função infalível de aviso (seja no Flet novo ou antigo)
     def avisar(texto):
         snack = ft.SnackBar(ft.Text(texto))
         if hasattr(page, "open"):
@@ -31,16 +30,14 @@ def main(page: ft.Page):
             ft.Icon(ft.Icons.ERROR, color=ft.Colors.RED_500, size=60),
             ft.Text(mensagem, color=ft.Colors.RED_300, weight=ft.FontWeight.BOLD, size=20, text_align=ft.TextAlign.CENTER),
             ft.Container(height=10),
-            ft.Text(erro_tecnico, size=12, color=ft.Colors.WHITE60, selectable=True),
+            # CORRIGIDO: WHITE_60 COM UNDERLINE
+            ft.Text(erro_tecnico, size=12, color=ft.Colors.WHITE_60, selectable=True),
             ft.Container(height=20),
             ft.ElevatedButton("Voltar", icon=ft.Icons.HOME, on_click=lambda _: tela_inicial())
         )
         page.update()
 
     try:
-        # ======= O SEGREDO ESTÁ AQUI =======
-        # Na versão nova do Flet, FilePicker não aceita argumentos na criação
-        # e tem que ser jogado em 'services' em vez de 'overlay'.
         file_picker = ft.FilePicker()
         
         def on_arquivo_selecionado(e: ft.FilePickerResultEvent):
@@ -57,7 +54,6 @@ def main(page: ft.Page):
             page.services.append(file_picker)
         else:
             page.overlay.append(file_picker)
-        # ====================================
 
         def gerar_heatmap(caminho_db, year):
             try:
@@ -201,7 +197,8 @@ def main(page: ft.Page):
                 ft.Icon(ft.Icons.ANALYTICS, size=80, color=ft.Colors.BLUE),
                 ft.Text("Anki Heatmap", size=28, weight=ft.FontWeight.BOLD),
                 ft.Container(height=10),
-                ft.Text("Escolha como carregar seus dados:", text_align=ft.TextAlign.CENTER, color=ft.Colors.WHITE70),
+                # CORRIGIDO: WHITE_70 COM UNDERLINE
+                ft.Text("Escolha como carregar seus dados:", text_align=ft.TextAlign.CENTER, color=ft.Colors.WHITE_70),
                 ft.Container(height=30),
                 
                 ft.ElevatedButton(
@@ -219,7 +216,8 @@ def main(page: ft.Page):
                     bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE
                 ),
                 ft.Container(height=20),
-                ft.Text("Dica: Vá nas pastas do celular até achar 'AnkiDroid' -> 'collection.anki2'", size=12, color=ft.Colors.WHITE54, text_align=ft.TextAlign.CENTER)
+                # CORRIGIDO: WHITE_54 COM UNDERLINE
+                ft.Text("Dica: Vá nas pastas do celular até achar 'AnkiDroid' -> 'collection.anki2'", size=12, color=ft.Colors.WHITE_54, text_align=ft.TextAlign.CENTER)
             )
             page.update()
 
